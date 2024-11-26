@@ -709,3 +709,234 @@ flowchart TD
 3. Implement token rotation
 4. Add monitoring and logging
 5. Consider adding rate limiting
+
+
+
+
+# Refresh Token Implementation
+
+## Table of Contents
+- [Overview](#overview)
+- [Interface Definition](#interface-definition)
+- [Implementation Details](#implementation-details)
+- [Process Flow](#process-flow)
+- [Code Implementation](#code-implementation)
+- [Security Considerations](#security-considerations)
+
+## Overview
+
+This implementation adds refresh token functionality to the authentication service, allowing users to obtain new access tokens using their refresh tokens without re-authentication.
+
+## Interface Definition
+
+```csharp
+public interface IAuthService
+{
+    Task<AuthResponse?> GetTokenAsync(
+        string email, 
+        string password, 
+        CancellationToken cancellationToken = default);
+
+    Task<AuthResponse?> GetRefreshTokenAsync(
+        string token, 
+        string refreshToken, 
+        CancellationToken cancellationToken = default);
+}
+```
+
+## Process Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as AuthService
+    participant J as JwtProvider
+    participant DB as Database
+
+    C->>A: Request New Tokens
+    A->>J: ValidateToken(token)
+    J-->>A: UserId or null
+    
+    alt Token Valid
+        A->>DB: FindUserById
+        alt User Found
+            A->>DB: Find Active RefreshToken
+            alt RefreshToken Valid
+                A->>DB: Revoke Old RefreshToken
+                A->>J: Generate New JWT
+                A->>A: Generate New RefreshToken
+                A->>DB: Save New RefreshToken
+                A-->>C: New Tokens
+            else
+                A-->>C: null
+            end
+        else
+            A-->>C: null
+        end
+    else
+        A-->>C: null
+    end
+```
+
+## Code Implementation
+
+```csharp
+public class AuthService : IAuthService
+{
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly IJwtProvider _jwtProvider;
+    private readonly int _refreshTokenExpiryDays = 14;
+
+    public AuthService(
+        UserManager<ApplicationUser> userManager,
+        IJwtProvider jwtProvider)
+    {
+        _userManager = userManager;
+        _jwtProvider = jwtProvider;
+    }
+
+    public async Task<AuthResponse?> GetRefreshTokenAsync(
+        string token,
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        // 1. Validate JWT and extract user ID
+        var userId = _jwtProvider.ValidateToken(token);
+        if (userId is null)
+            return null;
+
+        // 2. Find user in database
+        var user = await _userManager.FindByIdAsync(userId);
+        if (user is null)
+            return null;
+
+        // 3. Validate refresh token
+        var userRefreshToken = user.RefreshTokens
+            .SingleOrDefault(x => x.Token == refreshToken && x.IsActive);
+        if (userRefreshToken is null)
+            return null;
+
+        // 4. Revoke old refresh token
+        userRefreshToken.RevokedOn = DateTime.UtcNow;
+
+        // 5. Generate new tokens
+        var (newToken, expiresIn) = _jwtProvider.GenerateToken(user);
+        var newRefreshToken = GenerateRefreshToken();
+        var refreshTokenExpiration = DateTime.UtcNow
+            .AddDays(_refreshTokenExpiryDays);
+
+        // 6. Save new refresh token
+        user.RefreshTokens.Add(new RefreshToken
+        {
+            Token = newRefreshToken,
+            ExpiresOn = refreshTokenExpiration
+        });
+
+        // 7. Update user in database
+        await _userManager.UpdateAsync(user);
+
+        // 8. Return new tokens
+        return new AuthResponse(
+            user.Id,
+            user.Email,
+            user.FirstName,
+            user.LastName,
+            newToken,
+            expiresIn,
+            newRefreshToken,
+            refreshTokenExpiration);
+    }
+
+    private static string GenerateRefreshToken()
+    {
+        return Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
+    }
+}
+```
+
+## Validation Steps
+
+```mermaid
+flowchart TD
+    A[Start] --> B{Validate JWT}
+    B -->|Valid| C{Find User}
+    B -->|Invalid| D[Return null]
+    C -->|Found| E{Find Active RefreshToken}
+    C -->|Not Found| F[Return null]
+    E -->|Found| G[Revoke Old Token]
+    E -->|Not Found| H[Return null]
+    G --> I[Generate New Tokens]
+    I --> J[Save to Database]
+    J --> K[Return New Tokens]
+```
+
+## Security Considerations
+
+1. **Token Validation**:
+   - Validates JWT signature and expiration
+   - Verifies user exists in database
+   - Checks refresh token is active and matches user
+
+2. **Token Rotation**:
+   - Old refresh tokens are revoked, not deleted
+   - Maintains audit trail
+   - Prevents token reuse
+
+3. **Security Checks**:
+   ```csharp
+   var userRefreshToken = user.RefreshTokens
+       .SingleOrDefault(x => 
+           x.Token == refreshToken && 
+           x.IsActive);
+   ```
+   - Ensures token is active
+   - Validates token ownership
+   - Single-use refresh tokens
+
+## Implementation Details
+
+1. **Token States**:
+   - Active: Can be used for refresh
+   - Revoked: Marked with revocation timestamp
+   - Expired: Based on expiration date
+
+2. **Error Handling**:
+   - Returns null for any validation failure
+   - Maintains security through opacity
+   - No detailed error information leaked
+
+3. **Database Operations**:
+   - Atomic updates
+   - Proper relationship management
+   - Audit trail maintenance
+
+## Best Practices
+
+1. **Token Security**:
+   - Cryptographically secure token generation
+   - Proper token rotation
+   - Secure storage and transmission
+
+2. **Code Organization**:
+   - Clear separation of concerns
+   - Proper dependency injection
+   - Clean code principles
+
+3. **Error Handling**:
+   - Graceful failure handling
+   - No sensitive information exposure
+   - Proper null checking
+
+## Next Steps
+
+1. Add rate limiting for refresh token endpoints
+2. Implement token blacklisting
+3. Add monitoring and logging
+4. Consider implementing token family concept
+5. Add refresh token cleanup job
+
+Would you like me to:
+1. Add more details about token security?
+2. Include additional error handling scenarios?
+3. Expand the implementation examples?
+4. Add more diagrams for specific flows?
