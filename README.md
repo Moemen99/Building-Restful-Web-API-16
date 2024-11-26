@@ -309,3 +309,187 @@ erDiagram
    - Proper foreign key relationships
    - Table naming conventions
    - Efficient schema structure
+
+
+
+# JWT Validation and Refresh Token Implementation
+
+## Table of Contents
+- [Overview](#overview)
+- [Implementation Flow](#implementation-flow)
+- [Code Implementation](#code-implementation)
+  - [JWT Provider Interface](#jwt-provider-interface)
+  - [JWT Provider Implementation](#jwt-provider-implementation)
+- [Token Validation Process](#token-validation-process)
+- [Sequence Diagram](#sequence-diagram)
+
+## Overview
+
+The refresh token endpoint requires two pieces of information:
+1. The current JWT (expired or active)
+2. The refresh token
+
+This implementation validates both tokens and generates new ones if all security checks pass.
+
+## Implementation Flow
+
+```mermaid
+flowchart TD
+    A[Receive Tokens] --> B{Validate JWT}
+    B -->|Valid| C[Extract User ID]
+    B -->|Invalid| D[Return Error]
+    C --> E{Find Refresh Token}
+    E -->|Found| F{Validate Refresh Token}
+    E -->|Not Found| G[Return Error]
+    F -->|Valid| H{Compare User IDs}
+    F -->|Invalid| I[Return Error]
+    H -->|Match| J[Generate New Tokens]
+    H -->|No Match| K[Return Error]
+    J --> L[Revoke Old Token]
+    L --> M[Return New Tokens]
+```
+
+## Code Implementation
+
+### JWT Provider Interface
+
+```csharp
+public interface IJwtProvider
+{
+    (string token, int expiresIn) GenerateToken(ApplicationUser user);
+    string? ValidateToken(string token); // Returns user ID if valid, null if invalid
+}
+```
+
+### JWT Provider Implementation
+
+```csharp
+public class JwtProvider : IJwtProvider
+{
+    private readonly JwtOptions _options;
+
+    public JwtProvider(IOptions<JwtOptions> options)
+    {
+        _options = options.Value;
+    }
+
+    public string? ValidateToken(string token)
+    {
+        var tokenHandler = new JwtSecurityTokenHandler();
+        var symmetricSecurityKey = new SymmetricSecurityKey(
+            Encoding.UTF8.GetBytes(_options.Key));
+        
+        try
+        {
+            tokenHandler.ValidateToken(
+                token,
+                new TokenValidationParameters
+                {
+                    IssuerSigningKey = symmetricSecurityKey,
+                    ValidateIssuerSigningKey = true,
+                    ValidateIssuer = false,
+                    ValidateAudience = false,
+                    ClockSkew = TimeSpan.Zero // Immediate expiration
+                },
+                out SecurityToken validatedToken);
+
+            var jwtToken = (JwtSecurityToken)validatedToken;
+            
+            return jwtToken.Claims.First(
+                x => x.Type == JwtRegisteredClaimNames.Sub).Value;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
+```
+
+## Token Validation Process
+
+### 1. JWT Validation
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    participant J as JwtProvider
+    
+    C->>S: Send JWT + Refresh Token
+    S->>J: ValidateToken(jwt)
+    J-->>S: Return UserID or null
+    Note over J: Decode JWT using<br/>security key
+    Note over J: Extract Sub claim<br/>containing UserID
+```
+
+### 2. Security Checks
+
+The validation process performs these security checks:
+
+| Check | Description | Failure Action |
+|-------|-------------|----------------|
+| JWT Signature | Validates token wasn't tampered with | Return null |
+| Claims Extraction | Gets UserID from Sub claim | Return null |
+| Token Expiration | Verifies using ClockSkew = Zero | Return null |
+
+### 3. Key Implementation Details
+
+1. **Token Handler Configuration**:
+   ```csharp
+   var tokenHandler = new JwtSecurityTokenHandler();
+   var symmetricSecurityKey = new SymmetricSecurityKey(
+       Encoding.UTF8.GetBytes(_options.Key));
+   ```
+
+2. **Validation Parameters**:
+   - `ValidateIssuerSigningKey = true`: Ensures token signature validity
+   - `ValidateIssuer = false`: Skips issuer validation
+   - `ValidateAudience = false`: Skips audience validation
+   - `ClockSkew = TimeSpan.Zero`: Immediate expiration
+
+3. **Claims Extraction**:
+   ```csharp
+   jwtToken.Claims.First(x => x.Type == JwtRegisteredClaimNames.Sub).Value
+   ```
+
+## Security Considerations
+
+1. **Token Validation**:
+   - Immediate expiration enforcement
+   - Cryptographic signature verification
+   - Safe error handling
+
+2. **User Identity**:
+   - Extraction of user ID from claims
+   - Correlation with refresh token
+   - Protection against token misuse
+
+3. **Error Handling**:
+   - Graceful handling of invalid tokens
+   - No sensitive information in error responses
+   - Proper null handling
+
+## Next Steps
+
+The next implementation phases will include:
+1. Refresh token validation endpoint
+2. Token generation and revocation logic
+3. User identity correlation
+4. Database operations for refresh tokens
+
+## Best Practices Implemented
+
+1. **Security**:
+   - Zero clock skew for precise expiration
+   - Proper cryptographic key handling
+   - Safe error responses
+
+2. **Code Organization**:
+   - Interface-based design
+   - Dependency injection
+   - Clear separation of concerns
+
+3. **Token Handling**:
+   - Proper JWT validation
+   - Clean error handling
+   - Secure claim extraction
