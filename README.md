@@ -132,3 +132,180 @@ Gmail and other Google services use this pattern to keep users signed in for ext
    - Implement token caching
    - Optimize renewal process
    - Monitor token usage patterns
+
+
+
+
+# Implementing Refresh Token Storage in ASP.NET Core
+
+## Table of Contents
+- [Overview](#overview)
+- [Database Schema Implementation](#database-schema-implementation)
+  - [RefreshToken Model](#refreshtoken-model)
+  - [User Model Updates](#user-model-updates)
+  - [Database Configuration](#database-configuration)
+- [Entity Framework Configuration](#entity-framework-configuration)
+- [Database Migration](#database-migration)
+- [Schema Diagram](#schema-diagram)
+
+## Overview
+
+Unlike JWTs which are stateless and not stored in the database, refresh tokens require persistence. This implementation guides you through setting up the necessary database schema for storing and managing refresh tokens in ASP.NET Core using Entity Framework Core.
+
+## Database Schema Implementation
+
+### RefreshToken Model
+
+Create a new class `RefreshToken` in your Entities folder:
+
+```csharp
+[Owned]
+public class RefreshToken
+{
+    public string Token { get; set; } = string.Empty;
+    public DateTime ExpiresOn { get; set; }
+    public DateTime CreatedOn { get; set; } = DateTime.UtcNow;
+    public DateTime? RevokedOn { get; set; }
+    
+    // Computed properties
+    public bool IsExpired => DateTime.UtcNow >= ExpiresOn;
+    public bool IsActive => RevokedOn is null && !IsExpired;
+}
+```
+
+Key points about the RefreshToken model:
+- Marked as `[Owned]` to indicate it's an owned entity type
+- Tracks creation, expiration, and revocation dates
+- Includes computed properties for token status
+
+### User Model Updates
+
+Update the `ApplicationUser` class to include refresh tokens:
+
+```csharp
+public sealed class ApplicationUser : IdentityUser
+{
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+    
+    // Collection of refresh tokens
+    public List<RefreshToken> RefreshTokens { get; set; } = [];  // Use new() for pre-.NET 8
+}
+```
+
+### Database Context
+
+The `ApplicationDbContext` doesn't need explicit DbSet for RefreshTokens due to the owned entity configuration:
+
+```csharp
+public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
+{
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+        : base(options)
+    {
+    }
+
+    public DbSet<Poll> Polls { get; set; }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+        base.OnModelCreating(modelBuilder);
+    }
+}
+```
+
+## Entity Framework Configuration
+
+Configure the refresh token relationship in `UserConfiguration`:
+
+```csharp
+public class UserConfiguration : IEntityTypeConfiguration<ApplicationUser>
+{
+    public void Configure(EntityTypeBuilder<ApplicationUser> builder)
+    {
+        builder.OwnsMany(x => x.RefreshTokens)
+               .ToTable("RefreshTokens")
+               .WithOwner()
+               .HasForeignKey("UserId");
+
+        builder.Property(x => x.FirstName).HasMaxLength(100);
+        builder.Property(x => x.LastName).HasMaxLength(100);
+    }
+}
+```
+
+Key configuration points:
+- Uses `OwnsMany` to establish ownership relationship
+- Configures table name as "RefreshTokens"
+- Sets up foreign key relationship with user
+
+## Database Migration
+
+Run the following commands in Package Manager Console:
+
+```powershell
+Add-Migration AddRefreshTokensTable
+Update-Database
+```
+
+## Schema Diagram
+
+```mermaid
+erDiagram
+    ApplicationUser ||--o{ RefreshTokens : "owns"
+    ApplicationUser {
+        string Id PK
+        string FirstName
+        string LastName
+        string UserName
+        string Email
+    }
+    RefreshTokens {
+        int Id PK
+        string UserId FK
+        string Token
+        datetime ExpiresOn
+        datetime CreatedOn
+        datetime RevokedOn
+    }
+```
+
+## Key Features of the Implementation
+
+1. **Composite Primary Key**:
+   - Auto-generated ID (SQL Server identity)
+   - User ID (foreign key from ApplicationUser)
+
+2. **Token Management**:
+   - Creation timestamp
+   - Expiration tracking
+   - Revocation support
+   - Active status computation
+
+3. **Relationship Structure**:
+   - One-to-many relationship between User and RefreshTokens
+   - Owned entity pattern for tight coupling
+   - Automatic cascade delete
+
+4. **Data Protection**:
+   - Foreign key constraints
+   - Proper indexing (automatically handled by EF Core)
+   - Timestamp tracking for auditing
+
+## Best Practices Implemented
+
+1. **Entity Framework Patterns**:
+   - Use of owned entity types
+   - Proper relationship configuration
+   - Clean separation of concerns
+
+2. **Data Modeling**:
+   - Appropriate use of nullable types
+   - Default value initialization
+   - Computed properties for status checks
+
+3. **Database Design**:
+   - Proper foreign key relationships
+   - Table naming conventions
+   - Efficient schema structure
