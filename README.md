@@ -493,3 +493,219 @@ The next implementation phases will include:
    - Proper JWT validation
    - Clean error handling
    - Secure claim extraction
+
+
+
+# Authentication Service with Refresh Token Support
+
+## Table of Contents
+- [Overview](#overview)
+- [Implementation Details](#implementation-details)
+  - [Authentication Response Model](#authentication-response-model)
+  - [Authentication Service](#authentication-service)
+  - [Refresh Token Generation](#refresh-token-generation)
+- [Process Flow](#process-flow)
+- [Code Implementation](#code-implementation)
+
+## Overview
+
+The authentication service is updated to generate, store, and return refresh tokens alongside JWTs. This implementation includes:
+- Refresh token generation and storage
+- Configurable expiration periods
+- Database persistence
+- Enhanced authentication response
+
+## Implementation Details
+
+### Authentication Response Model
+
+```csharp
+public record AuthResponse(
+    string Id,
+    string? Email,
+    string FirstName,
+    string LastName,
+    string Token,
+    int ExpiresIn,
+    string RefreshToken,
+    DateTime RefreshTokenExpiration
+);
+```
+
+### Code Implementation
+
+```csharp
+public class AuthService : IAuthService
+{
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly IJwtProvider _jwtProvider;
+    private readonly int _refreshTokenExpiryDays = 14;
+
+    public AuthService(
+        UserManager<ApplicationUser> userManager,
+        IJwtProvider jwtProvider)
+    {
+        _userManager = userManager;
+        _jwtProvider = jwtProvider;
+    }
+
+    public async Task<AuthResponse?> GetTokenAsync(
+        string email,
+        string password,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await _userManager.FindByEmailAsync(email);
+        if (user is null)
+            return null;
+
+        var isValidPassword = await _userManager.CheckPasswordAsync(user, password);
+        if (!isValidPassword)
+            return null;
+
+        var (token, expiresIn) = _jwtProvider.GenerateToken(user);
+        
+        var refreshToken = GenerateRefreshToken();
+        var refreshTokenExpiration = DateTime.UtcNow.AddDays(_refreshTokenExpiryDays);
+        
+        user.RefreshTokens.Add(new RefreshToken
+        {
+            Token = refreshToken,
+            ExpiresOn = refreshTokenExpiration
+        });
+
+        await _userManager.UpdateAsync(user);
+
+        return new AuthResponse(
+            user.Id,
+            user.Email,
+            user.FirstName,
+            user.LastName,
+            token,
+            expiresIn,
+            refreshToken,
+            refreshTokenExpiration);
+    }
+
+    private static string GenerateRefreshToken()
+    {
+        return Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
+    }
+}
+```
+
+## Process Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as AuthService
+    participant J as JwtProvider
+    participant DB as Database
+
+    C->>A: Login Request
+    A->>DB: Find User
+    DB-->>A: User Details
+    A->>A: Validate Password
+    A->>J: Generate JWT
+    J-->>A: JWT + Expiration
+    A->>A: Generate Refresh Token
+    A->>DB: Store Refresh Token
+    A-->>C: Auth Response
+```
+
+## Token Generation and Storage Process
+
+### 1. Refresh Token Generation
+```mermaid
+flowchart TD
+    A[Start] --> B[Generate Random Bytes]
+    B --> C[Convert to Base64]
+    C --> D[Create RefreshToken Entity]
+    D --> E[Set Expiration]
+    E --> F[Add to User's Tokens]
+    F --> G[Save to Database]
+```
+
+### 2. Response Structure
+
+```json
+{
+  "id": "user123",
+  "email": "user@example.com",
+  "firstName": "John",
+  "lastName": "Doe",
+  "token": "eyJhbGci...",
+  "expiresIn": 1800,
+  "refreshToken": "base64EncodedToken...",
+  "refreshTokenExpiration": "2024-12-10T12:00:00Z"
+}
+```
+
+## Key Features
+
+1. **Token Generation**:
+   - Cryptographically secure refresh tokens
+   - 64 bytes of random data
+   - Base64 encoded for safe transmission
+
+2. **Expiration Handling**:
+   - Configurable expiration period
+   - UTC timestamps for consistency
+   - Stored in database for validation
+
+3. **Security Considerations**:
+   - Secure random number generation
+   - User-specific token storage
+   - Database persistence for revocation support
+
+## Implementation Notes
+
+1. **Configuration**:
+   ```csharp
+   private readonly int _refreshTokenExpiryDays = 14;
+   ```
+   - Configurable refresh token lifetime
+   - Can be moved to configuration file
+   - Default set to 14 days
+
+2. **Token Storage**:
+   ```csharp
+   user.RefreshTokens.Add(new RefreshToken
+   {
+       Token = refreshToken,
+       ExpiresOn = refreshTokenExpiration
+   });
+   ```
+   - Stored in user's token collection
+   - Automatic relationship management
+   - Easy querying and revocation
+
+3. **Response Options**:
+   - Currently returned in response body
+   - Can alternatively be sent in HTTP-only cookies
+   - Frontend must be aware of delivery method
+
+## Best Practices
+
+1. **Security**:
+   - Use of cryptographically secure random numbers
+   - Proper expiration handling
+   - Database persistence for audit trail
+
+2. **Architecture**:
+   - Separation of concerns
+   - Clean code principles
+   - Proper dependency injection
+
+3. **Data Handling**:
+   - UTC timestamps
+   - Proper null checking
+   - Async operations
+
+## Next Steps
+
+1. Implement refresh token validation endpoint
+2. Add token revocation functionality
+3. Implement token rotation
+4. Add monitoring and logging
+5. Consider adding rate limiting
