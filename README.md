@@ -1172,3 +1172,232 @@ sequenceDiagram
 3. Add detailed logging
 4. Consider adding token metadata
 5. Implement token cleanup job
+
+
+
+
+
+# Refresh Token Revocation Implementation
+
+## Table of Contents
+- [Overview](#overview)
+- [Interface Updates](#interface-updates)
+- [Implementation Details](#implementation-details)
+- [Controller Implementation](#controller-implementation)
+- [Process Flow](#process-flow)
+
+## Overview
+
+This implementation adds the ability to explicitly revoke refresh tokens, providing additional security control for applications that require it.
+
+## Interface Updates
+
+```csharp
+public interface IAuthService
+{
+    Task<AuthResponse?> GetTokenAsync(
+        string email,
+        string password,
+        CancellationToken cancellationToken = default);
+
+    Task<AuthResponse?> GetRefreshTokenAsync(
+        string token,
+        string refreshToken,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> RevokeRefreshTokenAsync(
+        string token,
+        string refreshToken,
+        CancellationToken cancellationToken = default);
+}
+```
+
+## Implementation Details
+
+```csharp
+public class AuthService : IAuthService
+{
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly IJwtProvider _jwtProvider;
+
+    public async Task<bool> RevokeRefreshTokenAsync(
+        string token,
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        // 1. Validate JWT and extract user ID
+        var userId = _jwtProvider.ValidateToken(token);
+        if (userId is null)
+            return false;
+
+        // 2. Find user in database
+        var user = await _userManager.FindByIdAsync(userId);
+        if (user is null)
+            return false;
+
+        // 3. Find and validate refresh token
+        var userRefreshToken = user.RefreshTokens
+            .SingleOrDefault(x => x.Token == refreshToken && x.IsActive);
+        if (userRefreshToken is null)
+            return false;
+
+        // 4. Revoke the token
+        userRefreshToken.RevokedOn = DateTime.UtcNow;
+        await _userManager.UpdateAsync(user);
+
+        return true;
+    }
+}
+```
+
+## Controller Implementation
+
+```csharp
+public class AuthController : ControllerBase
+{
+    private readonly IAuthService _authService;
+
+    [HttpPut("revoke-refresh-token")]
+    public async Task<IActionResult> RevokeRefreshTokenAsync(
+        [FromBody] RefreshTokenRequest request,
+        CancellationToken cancellationToken)
+    {
+        var isRevoked = await _authService.RevokeRefreshTokenAsync(
+            request.Token,
+            request.RefreshToken,
+            cancellationToken);
+
+        return isRevoked ? Ok() : BadRequest("Operation Failed");
+    }
+}
+```
+
+## Process Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant E as Endpoint
+    participant A as AuthService
+    participant J as JwtProvider
+    participant DB as Database
+
+    C->>E: PUT /revoke-refresh-token
+    E->>A: RevokeRefreshTokenAsync
+    A->>J: ValidateToken
+    
+    alt Invalid Token
+        J-->>A: null
+        A-->>E: false
+        E-->>C: 400 Bad Request
+    else Valid Token
+        J-->>A: userId
+        A->>DB: FindUserById
+        
+        alt User Not Found
+            DB-->>A: null
+            A-->>E: false
+            E-->>C: 400 Bad Request
+        else User Found
+            DB-->>A: user
+            A->>A: Find Active RefreshToken
+            
+            alt Token Not Found
+                A-->>E: false
+                E-->>C: 400 Bad Request
+            else Token Found
+                A->>DB: Update Token Status
+                DB-->>A: Success
+                A-->>E: true
+                E-->>C: 200 OK
+            end
+        end
+    end
+```
+
+## Validation Steps
+
+1. **JWT Validation**:
+   ```csharp
+   var userId = _jwtProvider.ValidateToken(token);
+   if (userId is null)
+       return false;
+   ```
+
+2. **User Validation**:
+   ```csharp
+   var user = await _userManager.FindByIdAsync(userId);
+   if (user is null)
+       return false;
+   ```
+
+3. **Refresh Token Validation**:
+   ```csharp
+   var userRefreshToken = user.RefreshTokens
+       .SingleOrDefault(x => x.Token == refreshToken && x.IsActive);
+   if (userRefreshToken is null)
+       return false;
+   ```
+
+## Request/Response Examples
+
+### Request
+```json
+{
+    "token": "eyJhbG...",
+    "refreshToken": "base64EncodedToken..."
+}
+```
+
+### Responses
+- Success: `200 OK`
+- Failure: `400 Bad Request` with message "Operation Failed"
+
+## Security Considerations
+
+1. **Token Validation**:
+   - Validates JWT signature
+   - Verifies user existence
+   - Checks refresh token status
+
+2. **State Management**:
+   - Marks tokens as revoked
+   - Maintains revocation timestamp
+   - Preserves token history
+
+3. **Access Control**:
+   - Requires valid JWT
+   - Validates token ownership
+   - Prevents unauthorized revocation
+
+## Best Practices
+
+1. **Error Handling**:
+   - Boolean return type for clear results
+   - Generic error messages
+   - Proper status codes
+
+2. **Database Operations**:
+   - Atomic updates
+   - Proper relationship handling
+   - Audit trail maintenance
+
+3. **API Design**:
+   - RESTful endpoint
+   - Clear request/response contract
+   - Proper HTTP method (PUT)
+
+## Next Steps
+
+1. Add logging for revocation events
+2. Implement batch revocation
+3. Add revocation reason tracking
+4. Consider adding admin override
+5. Implement token cleanup job
+6. Add metrics tracking
+
+Would you like me to:
+1. Add more security considerations?
+2. Include additional error handling scenarios?
+3. Expand the implementation examples?
+4. Add more diagrams for specific flows?
