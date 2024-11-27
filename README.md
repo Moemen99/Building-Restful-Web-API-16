@@ -940,3 +940,235 @@ Would you like me to:
 2. Include additional error handling scenarios?
 3. Expand the implementation examples?
 4. Add more diagrams for specific flows?
+
+
+
+
+# Refresh Token Endpoint Implementation
+
+## Table of Contents
+- [Overview](#overview)
+- [Component Structure](#component-structure)
+- [Implementation Details](#implementation-details)
+  - [Data Transfer Objects](#data-transfer-objects)
+  - [Validation](#validation)
+  - [Controller Implementation](#controller-implementation)
+- [Implementation Flow](#implementation-flow)
+- [Testing Scenarios](#testing-scenarios)
+
+## Overview
+
+This implementation adds an endpoint for token refresh operations, including:
+- Request/response DTOs
+- Input validation
+- Controller endpoint
+- Error handling
+
+## Component Structure
+
+```
+📁 Authentication/
+├── 📁 Contracts/
+│   ├── 📄 RefreshTokenRequest.cs
+│   └── 📄 RefreshTokenRequestValidator.cs
+└── 📄 AuthController.cs
+```
+
+## Implementation Details
+
+### Data Transfer Objects
+
+```csharp
+public record RefreshTokenRequest(
+    string Token,
+    string RefreshToken
+);
+```
+
+### Validation
+
+```csharp
+public class RefreshTokenRequestValidator : AbstractValidator<RefreshTokenRequest>
+{
+    public RefreshTokenRequestValidator()
+    {
+        RuleFor(x => x.Token).NotEmpty();
+        RuleFor(x => x.RefreshToken).NotEmpty();
+    }
+}
+```
+
+### Controller Implementation
+
+```csharp
+public class AuthController : ControllerBase
+{
+    private readonly IAuthService _authService;
+
+    public AuthController(IAuthService authService)
+    {
+        _authService = authService;
+    }
+
+    [HttpPost("")]
+    public async Task<IActionResult> LoginAsync(
+        LoginRequest request,
+        CancellationToken cancellationToken)
+    {
+        var authResult = await _authService.GetTokenAsync(
+            request.Email,
+            request.Password,
+            cancellationToken);
+
+        return authResult is null
+            ? BadRequest("Invalid Email or Password")
+            : Ok(authResult);
+    }
+
+    [HttpPost("refresh")]
+    public async Task<IActionResult> RefreshAsync(
+        RefreshTokenRequest request,
+        CancellationToken cancellationToken)
+    {
+        var authResult = await _authService.GetRefreshTokenAsync(
+            request.Token,
+            request.RefreshToken,
+            cancellationToken);
+
+        return authResult is null
+            ? BadRequest("Invalid Token")
+            : Ok(authResult);
+    }
+}
+```
+
+## Implementation Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant E as Endpoint
+    participant V as Validator
+    participant S as AuthService
+    participant D as Database
+
+    C->>E: POST /refresh
+    E->>V: Validate Request
+    
+    alt Invalid Request
+        V-->>E: Validation Error
+        E-->>C: 400 Bad Request
+    else Valid Request
+        V-->>E: Valid
+        E->>S: GetRefreshTokenAsync
+        S->>D: Validate & Update
+        
+        alt Valid Tokens
+            D-->>S: Success
+            S-->>E: New Tokens
+            E-->>C: 200 OK + New Tokens
+        else Invalid Tokens
+            D-->>S: Failure
+            S-->>E: null
+            E-->>C: 400 Bad Request
+        end
+    end
+```
+
+## Request/Response Examples
+
+### Request
+```json
+{
+    "token": "eyJhbGci...",
+    "refreshToken": "base64EncodedToken..."
+}
+```
+
+### Success Response
+```json
+{
+    "id": "user123",
+    "email": "user@example.com",
+    "firstName": "John",
+    "lastName": "Doe",
+    "token": "newEyJhbGci...",
+    "expiresIn": 1800,
+    "refreshToken": "newBase64EncodedToken...",
+    "refreshTokenExpiration": "2024-12-10T12:00:00Z"
+}
+```
+
+## Key Features
+
+1. **Multiple Device Support**:
+   - Single user can have multiple active refresh tokens
+   - Supports login from different devices
+   - Each token is tracked independently
+
+2. **Token Rotation**:
+   - Old tokens are revoked upon use
+   - New tokens generated with each refresh
+   - Maintains security through rotation
+
+3. **Validation**:
+   - Input validation using FluentValidation
+   - Token validation in service layer
+   - Proper error responses
+
+## Security Considerations
+
+1. **Input Validation**:
+   ```csharp
+   RuleFor(x => x.Token).NotEmpty();
+   RuleFor(x => x.RefreshToken).NotEmpty();
+   ```
+   - Prevents empty or null tokens
+   - Basic security validation
+
+2. **Error Handling**:
+   - Generic error messages
+   - No detailed error information exposed
+   - Consistent response format
+
+3. **Token Management**:
+   - Proper token rotation
+   - Token revocation tracking
+   - Support for multiple devices
+
+## Best Practices
+
+1. **Controller Design**:
+   - Single responsibility
+   - Clean routing
+   - Proper dependency injection
+
+2. **Validation**:
+   - Separate validator class
+   - Clear validation rules
+   - Proper error messages
+
+3. **Response Handling**:
+   - Consistent response format
+   - Proper HTTP status codes
+   - Clear error messages
+
+## Testing Scenarios
+
+1. **Success Path**:
+   - Valid tokens provided
+   - New tokens generated
+   - Old token revoked
+
+2. **Failure Paths**:
+   - Invalid/expired tokens
+   - Missing tokens
+   - Already revoked tokens
+
+## Next Steps
+
+1. Add rate limiting
+2. Implement token blacklisting
+3. Add detailed logging
+4. Consider adding token metadata
+5. Implement token cleanup job
